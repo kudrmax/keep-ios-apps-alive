@@ -5,7 +5,7 @@ import plistlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .errors import InstallError
 from .shell import Shell
@@ -29,6 +29,43 @@ class Container:
         if projects:
             return cls("-project", projects[0])
         raise InstallError(f"в {root} нет ни .xcworkspace, ни .xcodeproj")
+
+
+@dataclass(frozen=True)
+class XcodeInstall:
+    app: Path
+    version: str
+
+    @property
+    def developer_dir(self) -> Path:
+        return self.app / "Contents/Developer"
+
+    @property
+    def version_key(self) -> Tuple[int, ...]:
+        return tuple(int(part) for part in re.findall(r"\d+", self.version))
+
+
+class XcodeInstalls:
+    """Every Xcode on this Mac, newest first: one of them may lack the iOS platform of the connected iPhone."""
+
+    @staticmethod
+    def find(shell: Shell) -> List[XcodeInstall]:
+        found = shell.run(["mdfind", "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"]).stdout.splitlines()
+        apps = {Path(path) for path in found if path.endswith(".app")}
+        apps |= set(Path("/Applications").glob("Xcode*.app"))
+        installs = []
+        for app in apps:
+            info = app / "Contents/Info.plist"
+            if (app / "Contents/Developer").is_dir() and info.is_file():
+                with info.open("rb") as stream:
+                    installs.append(XcodeInstall(app, plistlib.load(stream).get("CFBundleShortVersionString", "0")))
+        return sorted(installs, key=lambda install: install.version_key, reverse=True)
+
+
+class DestinationCheck:
+    @staticmethod
+    def supports(destinations: str, device_udid: str) -> bool:
+        return any(f"id:{device_udid}" in line and "error:" not in line for line in destinations.splitlines())
 
 
 @dataclass(frozen=True)
@@ -91,6 +128,15 @@ class XcodeProject:
     @property
     def name(self) -> str:
         return self._container.name
+
+    def using(self, xcode: XcodeInstall) -> "XcodeProject":
+        return XcodeProject(self._shell.with_developer_dir(xcode.developer_dir), self._root, self._derived_data,
+                            self._packages, self._configuration)
+
+    def supports(self, scheme: str, device_udid: str) -> bool:
+        result = self._shell.run(["xcodebuild", *self._container_args(), "-scheme", scheme, "-showdestinations"],
+                                 cwd=self._root)
+        return DestinationCheck.supports(result.stdout, device_udid)
 
     def schemes(self) -> List[str]:
         listing = json.loads(self._xcodebuild(self._container_args() + ["-list", "-json"]))

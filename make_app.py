@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Creates a one-click "Install <Name>.app" for a project: it opens Terminal and installs the latest build on the iPhone.
-Usage: make_app.py <project clone> [--name N] [--scheme S] [--team T] [--iphone NAME] [--branch B] [--output DIR]"""
+Usage: make_app.py <project clone> [--name N] [--scheme S] [--team T] [--iphone NAME] [--xcode APP] [--branch B] [--output DIR]"""
 import argparse
 import plistlib
 import re
@@ -106,6 +106,7 @@ def main() -> int:
     parser.add_argument("--scheme", help="схема, если их несколько")
     parser.add_argument("--team", help="команда подписи, если в Xcode их несколько")
     parser.add_argument("--iphone", help="имя айфона, если сопряжено несколько")
+    parser.add_argument("--xcode", help="путь к Xcode.app, если автовыбор не подходит")
     parser.add_argument("--branch", default="main", help="ветка на GitHub (по умолчанию main)")
     parser.add_argument("--output", type=Path, default=Path.home() / "Applications", help="куда положить иконку")
     args = parser.parse_args()
@@ -117,7 +118,7 @@ def main() -> int:
         print(f"✖ {error}", file=sys.stderr)
         return 1
     config = InstallConfig(name=name, clone=str(clone), branch=args.branch, scheme=args.scheme, team=args.team,
-                           iphone=args.iphone)
+                           iphone=args.iphone, xcode=args.xcode)
     args.output.mkdir(parents=True, exist_ok=True)
     bundle = AppBundle(config, args.output)
     bundle.create()

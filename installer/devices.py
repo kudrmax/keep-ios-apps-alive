@@ -82,10 +82,10 @@ class XcodeWaker:
         self._devices = devices
         self._opened = False
 
-    def wake(self, device: Device, on_wait) -> None:
+    def wake(self, device: Device, xcode_app: Path, on_wait) -> None:
         if not self._shell.succeeds(["pgrep", "-x", "Xcode"]):
             self._opened = True
-        self._shell.run(["open", "-g", "-a", "Xcode"])
+        self._shell.run(["open", "-g", "-a", str(xcode_app)])
         for attempt in range(1, self.TRIES + 1):
             time.sleep(self.PAUSE_SECONDS)
             if self._devices.reachable(device):
@@ -95,5 +95,5 @@ class XcodeWaker:
 
     def close(self) -> None:
         if self._opened:
-            self._shell.run(["osascript", "-e", 'quit app "Xcode"'])
+            self._shell.run(["osascript", "-e", 'quit app id "com.apple.dt.Xcode"'])
             self._opened = False

@@ -19,6 +19,7 @@ class InstallConfig:
     scheme: Optional[str] = None
     team: Optional[str] = None
     iphone: Optional[str] = None
+    xcode: Optional[str] = None
 
     @classmethod
     def load(cls, path: Path) -> "InstallConfig":

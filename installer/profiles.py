@@ -15,10 +15,12 @@ PROFILE_FOLDERS = [
 
 
 class ProfileMatcher:
+    """Apple requires an extension's bundle id to start with its app's id and a dot, so those profiles are the app's."""
+
     @staticmethod
     def matches(application_identifier: str, team: str, bundle_ids: Iterable[str]) -> bool:
         prefix, _, bundle_id = application_identifier.partition(".")
-        return prefix == team and bundle_id in set(bundle_ids)
+        return prefix == team and any(bundle_id == own or bundle_id.startswith(f"{own}.") for own in bundle_ids)
 
 
 class ProfileRefresh:
