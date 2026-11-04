@@ -1,20 +1,16 @@
-#!/usr/bin/env python3
-"""Creates a one-click "Install <Name>.app" for a project: it opens Terminal and installs the latest build on the iPhone.
-Usage: make_app.py <project clone> [--name N] [--scheme S] [--team T] [--iphone NAME] [--xcode APP] [--branch B] [--output DIR]"""
-import argparse
+from __future__ import annotations
+
 import plistlib
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
-from installer.config import InstallConfig
-from installer.errors import InstallError
-from installer.xcode import Container
+from .config import InstallConfig
 
-TOOL_ROOT = Path(__file__).resolve().parent
+TOOL_ROOT = Path(__file__).resolve().parent.parent
 ICON_SIZES = [16, 32, 128, 256, 512]
 
 LAUNCHER = """#!/bin/bash
@@ -26,16 +22,19 @@ cd "$(dirname "$0")" && exec /usr/bin/python3 -B install_on_iphone.py config.jso
 """
 
 
-class AppBundle:
-    def __init__(self, config: InstallConfig, output: Path):
+class LauncherApp:
+    """"Install <Name>.app": a plain bundle whose executable is a shell script that opens Terminal with the installer.
+    It carries its own copy of the installer and its config, so it keeps working whatever happens to this repository."""
+
+    def __init__(self, config: InstallConfig, folder: Path, register: bool = True):
         self._config = config
-        self.path = output / f"Install {config.name}.app"
+        self._register_with_system = register
+        self.path = folder / f"Install {config.name}.app"
         self._contents = self.path / "Contents"
         self._resources = self._contents / "Resources"
 
     def create(self) -> None:
-        if self.path.exists():
-            subprocess.run(["trash", str(self.path)], check=True)
+        self.remove()
         (self._contents / "MacOS").mkdir(parents=True)
         self._resources.mkdir()
         self._write_executable(self._contents / "MacOS/launch", LAUNCHER)
@@ -46,6 +45,12 @@ class AppBundle:
         self._config.save(self._resources / "config.json")
         has_icon = AppIcon(self._config.clone_path).write(self._resources / "AppIcon.icns")
         self._write_info_plist(has_icon)
+        if self._register_with_system:
+            self._register()
+
+    def remove(self) -> None:
+        if self.path.exists():
+            subprocess.run(["trash", str(self.path)], check=True)
 
     def _write_info_plist(self, has_icon: bool) -> None:
         slug = re.sub(r"[^A-Za-z0-9-]", "-", self._config.name)
@@ -62,6 +67,12 @@ class AppBundle:
         with (self._contents / "Info.plist").open("wb") as stream:
             plistlib.dump(info, stream)
 
+    def _register(self) -> None:
+        """Makes Spotlight and Launchpad notice the new or rebuilt app right away."""
+        lsregister = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework"
+                      "/Support/lsregister")
+        subprocess.run([lsregister, "-f", str(self.path)], capture_output=True)
+
     @staticmethod
     def _write_executable(path: Path, text: str) -> None:
         path.write_text(text)
@@ -69,7 +80,7 @@ class AppBundle:
 
 
 class AppIcon:
-    """The project's own app icon, so every installer looks like the app it installs."""
+    """The project's own app icon, so every launcher looks like the app it installs."""
 
     def __init__(self, clone: Path):
         self._clone = clone
@@ -87,7 +98,7 @@ class AppIcon:
             return subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(target)],
                                   capture_output=True).returncode == 0
 
-    def _largest_icon(self):
+    def _largest_icon(self) -> Optional[Path]:
         listing = subprocess.run(["git", "-C", str(self._clone), "ls-files", "-z", "*AppIcon.appiconset/*.png"],
                                  capture_output=True, text=True).stdout
         icons = [self._clone / name for name in listing.split("\0") if name]
@@ -97,34 +108,3 @@ class AppIcon:
     def _resize(source: Path, size: int, target: Path) -> None:
         subprocess.run(["sips", "-z", str(size), str(size), str(source), "--out", str(target)],
                        capture_output=True, check=True)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("clone", type=Path, help="папка git-клона проекта")
-    parser.add_argument("--name", help="имя приложения в иконке (по умолчанию — имя Xcode-проекта)")
-    parser.add_argument("--scheme", help="схема, если их несколько")
-    parser.add_argument("--team", help="команда подписи, если в Xcode их несколько")
-    parser.add_argument("--iphone", help="имя айфона, если сопряжено несколько")
-    parser.add_argument("--xcode", help="путь к Xcode.app, если автовыбор не подходит")
-    parser.add_argument("--branch", help="ветка на GitHub (по умолчанию основная: main или master)")
-    parser.add_argument("--output", type=Path, default=Path.home() / "Applications", help="куда положить иконку")
-    args = parser.parse_args()
-
-    clone = args.clone.expanduser().resolve()
-    try:
-        name = args.name or Container.find(clone).name
-    except InstallError as error:
-        print(f"✖ {error}", file=sys.stderr)
-        return 1
-    config = InstallConfig(name=name, clone=str(clone), branch=args.branch, scheme=args.scheme, team=args.team,
-                           iphone=args.iphone, xcode=args.xcode)
-    args.output.mkdir(parents=True, exist_ok=True)
-    bundle = AppBundle(config, args.output)
-    bundle.create()
-    print(f"✔ {bundle.path}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

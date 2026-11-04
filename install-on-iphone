@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Manages the one-click "Install <Name>.app" launchers. Run with --help."""
+import sys
+
+from installer.cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())
