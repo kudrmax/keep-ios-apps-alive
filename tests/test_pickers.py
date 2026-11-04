@@ -42,7 +42,7 @@ class SchemePickerTest(unittest.TestCase):
         self.assertEqual(SchemePicker.pick(["App"], "Project", None), "App")
 
     def test_scheme_named_after_project(self):
-        self.assertEqual(SchemePicker.pick(["SuperPooper", "SuperPooperWidgets"], "SuperPooper", None), "SuperPooper")
+        self.assertEqual(SchemePicker.pick(["Shop", "ShopWidgets"], "Shop", None), "Shop")
 
     def test_ambiguous(self):
         with self.assertRaises(InstallError):

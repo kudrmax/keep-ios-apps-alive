@@ -53,8 +53,8 @@ class ProjectNameTest(unittest.TestCase):
         self.assertEqual(ProjectName.guess(self.clone), "Calendar")
 
     def test_xcodegen_spec(self):
-        (self.clone / "project.yml").write_text("name: TaskCalendar\noptions:\n  bundleIdPrefix: com.x\n")
-        self.assertEqual(ProjectName.guess(self.clone), "TaskCalendar")
+        (self.clone / "project.yml").write_text("name: Shop\noptions:\n  bundleIdPrefix: com.x\n")
+        self.assertEqual(ProjectName.guess(self.clone), "Shop")
 
     def test_folder(self):
         self.assertEqual(ProjectName.guess(self.clone), "my-app")
