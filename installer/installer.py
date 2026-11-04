@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import plistlib
 import shutil
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from typing import List
@@ -12,9 +13,10 @@ from .console import Console
 from .devices import Device, DevicePicker, Devices, XcodeWaker
 from .errors import InstallError
 from .profiles import ProfileRefresh
+from .progress import BuildActivity, StatusLine
 from .shell import Shell
 from .source import GitSource, Workspace
-from .xcode import PlatformCheck, SchemePicker, TeamPicker, XcodeInstall, XcodeInstalls, XcodeProject
+from .xcode import PlatformCheck, ProjectGenerator, SchemePicker, TeamPicker, XcodeInstall, XcodeInstalls, XcodeProject
 
 LOG_TAIL_LINES = 40
 
@@ -63,22 +65,33 @@ class Installer:
             self._waker.wake(device, xcodes[0].app, lambda seconds: console.info(f"…жду ({seconds} с)"))
         console.info("Соединение есть")
 
-        with Workspace(self._shell, self._source) as workspace:
+        console.step(f"Выкладываю {upstream} во временную папку")
+        with ExitStack() as cleanup:
+            with StatusLine("исходники и подмодули"):
+                workspace = cleanup.enter_context(Workspace(self._shell, self._source))
             self._build_and_install(workspace, xcodes, device, online, revision)
 
     def _build_and_install(self, workspace: Workspace, xcodes: List[XcodeInstall], device: Device, online: bool,
                            revision: str) -> None:
         console = self._console
         console.step("Читаю проект")
-        project = XcodeProject(self._shell, workspace.tree, workspace.derived_data, self._config.configuration)
-        scheme = SchemePicker.pick(project.schemes(), project.name, self._config.scheme)
-        xcode = self._xcode_for(project, xcodes, scheme, device)
-        project = project.using(xcode)
-        app = project.app(scheme, self._config.team)
-        team = self._config.team or app.team
-        if not team:
-            team = TeamPicker.pick(TeamPicker.signed_in_teams(self._shell), None)
-            app = replace(project.app(scheme, team), team=team)
+        with StatusLine("ищу проект") as status:
+            generator = ProjectGenerator(self._shell)
+            if generator.needed(workspace.tree):
+                status.update("генерирую .xcodeproj из project.yml (XcodeGen)")
+                generator.generate(workspace.tree)
+            project = XcodeProject(self._shell, workspace.tree, workspace.derived_data, self._config.configuration)
+            status.update("читаю схемы")
+            scheme = SchemePicker.pick(project.schemes(), project.name, self._config.scheme)
+            status.update("выбираю Xcode, который собирает под этот айфон")
+            xcode = self._xcode_for(project, xcodes, scheme, device)
+            project = project.using(xcode)
+            status.update(f"читаю настройки сборки (Xcode {xcode.version})")
+            app = project.app(scheme, self._config.team)
+            team = self._config.team or app.team
+            if not team:
+                team = TeamPicker.pick(TeamPicker.signed_in_teams(self._shell), None)
+                app = replace(project.app(scheme, team), team=team)
         console.info(f"Xcode {xcode.version}, схема {scheme}, приложение {app.path.name}, команда {team}")
 
         refresh = ProfileRefresh(self._shell, team, app.bundle_ids)
@@ -90,7 +103,10 @@ class Installer:
             console.warn("без сети подпись не продлить — остаётся прежний срок")
 
         console.step(f"Собираю {self._config.configuration} для {device.name}")
-        if not project.build(scheme, team, device.udid, workspace.log):
+        with StatusLine("запускаю xcodebuild") as status:
+            built = project.build(scheme, team, device.udid, workspace.log,
+                                  lambda line: self._show_activity(status, line))
+        if not built:
             refresh.restore()
             log = workspace.log.read_text(errors="replace")
             console.info("\n".join(log.splitlines()[-LOG_TAIL_LINES:]))
@@ -100,8 +116,15 @@ class Installer:
         console.info(f"Собрано, подпись до {self._expiry(app.path)}")
 
         console.step("Ставлю на айфон")
-        self._devices.install(device, app.path)
+        with StatusLine(f"передаю {app.path.name} на {device.name}"):
+            self._devices.install(device, app.path)
         console.success(f"{app.product_name} установлен на {device.name} ({revision})")
+
+    @staticmethod
+    def _show_activity(status: StatusLine, line: str) -> None:
+        activity = BuildActivity.describe(line)
+        if activity:
+            status.update(activity)
 
     def _save_failure_log(self, log: Path) -> Path:
         target = self._config.failure_log

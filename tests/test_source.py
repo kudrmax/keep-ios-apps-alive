@@ -19,6 +19,7 @@ class GitRepos:
         self.git(self.remote, "init", "-q", "-b", branch)
         self.commit(self.remote, "first")
         self.git(self.root, "clone", "-q", str(self.remote), str(self.clone))
+        self.git(self.remote, "config", "receive.denyCurrentBranch", "ignore")
 
     def git(self, cwd: Path, *args: str) -> str:
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
@@ -97,6 +98,20 @@ class WorkspaceTest(unittest.TestCase):
             with Workspace(Shell(), self.source) as workspace:
                 raise RuntimeError
         self.assertFalse(workspace.tree.exists())
+        self.assertEqual(len(self.repos.git(self.repos.clone, "worktree", "list").splitlines()), 1)
+
+    def test_submodule_comes_from_the_clone_without_network(self):
+        library = self.repos.root / "library"
+        library.mkdir()
+        self.repos.git(library, "init", "-q", "-b", "main")
+        self.repos.commit(library, "library")
+        self.repos.git(self.repos.clone, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
+        self.repos.git(self.repos.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "lib")
+        self.repos.git(self.repos.clone, "push", "-q", "origin", "main")
+        self.repos.git(self.repos.clone, "fetch", "-q", "origin")
+        library.rename(self.repos.root / "library-unreachable")
+        with Workspace(Shell(), self.source) as workspace:
+            self.assertEqual((workspace.tree / "lib" / "file.txt").read_text(), "library")
         self.assertEqual(len(self.repos.git(self.repos.clone, "worktree", "list").splitlines()), 1)
 
     def test_no_branch_on_remote(self):

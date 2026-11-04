@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .errors import InstallError
 from .shell import Shell
@@ -28,7 +30,29 @@ class Container:
         projects = sorted(root.glob("*.xcodeproj"))
         if projects:
             return cls("-project", projects[0])
-        raise InstallError(f"в {root} нет ни .xcworkspace, ни .xcodeproj")
+        raise InstallError(f"в {root} нет ни .xcworkspace, ни .xcodeproj, ни project.yml для XcodeGen")
+
+
+class ProjectGenerator:
+    """Projects that keep their .xcodeproj out of git and generate it from project.yml with XcodeGen."""
+
+    SPEC = "project.yml"
+    SEARCH_PATH = ["/opt/homebrew/bin", "/usr/local/bin"]
+
+    def __init__(self, shell: Shell):
+        self._shell = shell
+
+    def needed(self, root: Path) -> bool:
+        has_container = any(root.glob("*.xcworkspace")) or any(root.glob("*.xcodeproj"))
+        return not has_container and (root / self.SPEC).is_file()
+
+    def generate(self, root: Path) -> None:
+        xcodegen = shutil.which("xcodegen", path=os.pathsep.join([os.environ.get("PATH", "")] + self.SEARCH_PATH))
+        if not xcodegen:
+            raise InstallError("проект генерируется XcodeGen, а он не установлен — brew install xcodegen")
+        result = self._shell.run([xcodegen, "generate", "--quiet"], cwd=root)
+        if result.returncode != 0:
+            raise InstallError(f"XcodeGen не сгенерировал проект: {(result.stderr or result.stdout).strip()[-500:]}")
 
 
 @dataclass(frozen=True)
@@ -159,10 +183,11 @@ class XcodeProject:
             team=app.get("DEVELOPMENT_TEAM", ""),
         )
 
-    def build(self, scheme: str, team: Optional[str], device_udid: str, log: Path) -> bool:
+    def build(self, scheme: str, team: Optional[str], device_udid: str, log: Path,
+              on_line: Callable[[str], None]) -> bool:
         args = self._build_args(scheme, team) + [
             "-destination", f"id={device_udid}", "-allowProvisioningUpdates", "build"]
-        return self._shell.run_logged(["xcodebuild", *args], log, cwd=self._root)
+        return self._shell.run_streamed(["xcodebuild", *args], log, on_line, cwd=self._root)
 
     def _container_args(self) -> List[str]:
         return [self._container.flag, str(self._container.path)]

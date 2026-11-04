@@ -89,17 +89,41 @@ class Workspace:
         self.log = self._root / "build.log"
 
     def __enter__(self) -> "Workspace":
-        if not self._source.add_worktree(self.tree):
+        try:
+            if not self._source.add_worktree(self.tree):
+                raise InstallError(f"не получилось выложить {self._source.upstream} во временную папку")
+            if (self.tree / ".gitmodules").exists():
+                self._check_out_submodules()
+            self._copy_local_configs()
+        except BaseException:
             self.__exit__()
-            raise InstallError(f"не получилось выложить {self._source.upstream} во временную папку")
-        if (self.tree / ".gitmodules").exists():
-            self._shell.run(["git", "-C", str(self.tree), "submodule", "update", "--quiet", "--init", "--recursive"])
-        self._copy_local_configs()
+            raise
         return self
 
     def __exit__(self, *_) -> None:
         self._shell.run(["trash", str(self._root)])
         self._source.prune_worktrees()
+
+    def _check_out_submodules(self) -> None:
+        """Submodules come from the clone's own checkouts: no network, and git hard-links their objects.
+        Only a commit the clone does not have yet is downloaded from the submodule's remote."""
+        self._tree_git("submodule", "init")
+        listing = self._tree_git("config", "--file", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$").stdout
+        for key, path in (line.split(" ", 1) for line in listing.splitlines()):
+            name = key[len("submodule."):-len(".path")]
+            local = self._source.clone / path
+            if (local / ".git").exists():
+                self._tree_git("config", f"submodule.{name}.url", str(local))
+        update = ["-c", "protocol.file.allow=always", "submodule", "update", "--quiet", "--recursive"]
+        if self._tree_git(*update).returncode == 0:
+            return
+        self._tree_git("submodule", "sync", "--quiet", "--recursive")
+        result = self._tree_git(*update)
+        if result.returncode != 0:
+            raise InstallError(f"не получилось подтянуть подмодули: {result.stderr.strip()[-300:]}")
+
+    def _tree_git(self, *args: str):
+        return self._shell.run(["git", "-C", str(self.tree), *args])
 
     def _copy_local_configs(self) -> None:
         for relative in self._source.local_configs():
