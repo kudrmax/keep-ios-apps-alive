@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
-
-CACHE_ROOT = Path.home() / "Library/Caches/install-on-iphone"
 
 
 @dataclass(frozen=True)
@@ -14,7 +13,7 @@ class InstallConfig:
     name: str
     clone: str
     remote: str = "origin"
-    branch: str = "main"
+    branch: Optional[str] = None
     configuration: str = "Release"
     scheme: Optional[str] = None
     team: Optional[str] = None
@@ -33,6 +32,10 @@ class InstallConfig:
         return Path(self.clone).expanduser()
 
     @property
-    def cache(self) -> Path:
+    def lock(self) -> Path:
         digest = hashlib.sha1(str(self.clone_path).encode()).hexdigest()[:8]
-        return CACHE_ROOT / f"{self.clone_path.name}-{digest}"
+        return Path(tempfile.gettempdir()) / f"install-on-iphone-{digest}.lock"
+
+    @property
+    def failure_log(self) -> Path:
+        return Path.home() / "Library/Logs/install-on-iphone" / f"{self.name}.log"

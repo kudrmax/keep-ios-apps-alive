@@ -117,12 +117,11 @@ class XcodeProject:
     APP_PRODUCT = "com.apple.product-type.application"
     BUNDLED_WRAPPERS = ("app", "appex")
 
-    def __init__(self, shell: Shell, root: Path, derived_data: Path, packages: Path, configuration: str):
+    def __init__(self, shell: Shell, root: Path, derived_data: Path, configuration: str):
         self._shell = shell
         self._container = Container.find(root)
         self._root = root
         self._derived_data = derived_data
-        self._packages = packages
         self._configuration = configuration
 
     @property
@@ -131,7 +130,7 @@ class XcodeProject:
 
     def using(self, xcode: XcodeInstall) -> "XcodeProject":
         return XcodeProject(self._shell.with_developer_dir(xcode.developer_dir), self._root, self._derived_data,
-                            self._packages, self._configuration)
+                            self._configuration)
 
     def supports(self, scheme: str, device_udid: str) -> bool:
         result = self._shell.run(["xcodebuild", *self._container_args(), "-scheme", scheme, "-showdestinations"],
@@ -173,7 +172,6 @@ class XcodeProject:
             "-scheme", scheme,
             "-configuration", self._configuration,
             "-derivedDataPath", str(self._derived_data),
-            "-clonedSourcePackagesDirPath", str(self._packages),
         ]
         return args + ([f"DEVELOPMENT_TEAM={team}"] if team else [])
 

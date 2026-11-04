@@ -107,7 +107,7 @@ def main() -> int:
     parser.add_argument("--team", help="команда подписи, если в Xcode их несколько")
     parser.add_argument("--iphone", help="имя айфона, если сопряжено несколько")
     parser.add_argument("--xcode", help="путь к Xcode.app, если автовыбор не подходит")
-    parser.add_argument("--branch", default="main", help="ветка на GitHub (по умолчанию main)")
+    parser.add_argument("--branch", help="ветка на GitHub (по умолчанию основная: main или master)")
     parser.add_argument("--output", type=Path, default=Path.home() / "Applications", help="куда положить иконку")
     args = parser.parse_args()
 

@@ -1,44 +1,48 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .errors import InstallError
 from .shell import Shell
 
 
 class GitSource:
-    """The project's own clone. Only its remote-tracking ref is updated: branches, HEAD and files stay untouched."""
+    """The project's own clone. Only its remote-tracking ref is fetched: branches, HEAD and files stay untouched."""
 
     FETCH_ATTEMPTS = 3
     FETCH_PAUSE_SECONDS = 2
+    MAIN_BRANCHES = ("main", "master")
 
-    def __init__(self, shell: Shell, clone: Path, remote: str, branch: str):
+    def __init__(self, shell: Shell, clone: Path, remote: str, branch: Optional[str]):
         self._shell = shell
         self.clone = clone
         self._remote = remote
-        self._branch = branch
+        self.branch = branch or self._main_branch()
 
     @property
     def upstream(self) -> str:
-        return f"{self._remote}/{self._branch}"
+        return f"{self._remote}/{self.branch}"
 
-    def fetch(self) -> None:
+    def fetch(self) -> bool:
+        """False when GitHub is out of reach: the last fetched state of the branch is built then."""
         # Another agent fetching at the same moment holds the ref lock, so a failed fetch is worth a retry.
         for attempt in range(1, self.FETCH_ATTEMPTS + 1):
-            result = self._git("fetch", "--quiet", self._remote, self._branch)
-            if result.returncode == 0:
-                return
+            if self._git("fetch", "--quiet", self._remote, self.branch).returncode == 0:
+                return True
             if attempt < self.FETCH_ATTEMPTS:
                 time.sleep(self.FETCH_PAUSE_SECONDS)
-        raise InstallError(f"не получилось скачать {self.upstream} с GitHub: {result.stderr.strip()}")
+        if not self._ref_exists(f"refs/remotes/{self.upstream}"):
+            raise InstallError(f"нет ни сети, ни {self.upstream} — хотя бы раз сделать push или pull")
+        return False
 
     def unpushed_commits(self) -> int:
-        if self._git("rev-parse", "--verify", "--quiet", f"refs/heads/{self._branch}").returncode != 0:
+        if not self._ref_exists(f"refs/heads/{self.branch}"):
             return 0
-        return int(self._git("rev-list", "--count", f"{self.upstream}..{self._branch}").stdout.strip())
+        return int(self._git("rev-list", "--count", f"{self.upstream}..{self.branch}").stdout.strip())
 
     def describe(self, revision: str) -> str:
         return self._git("log", "--oneline", "-1", revision).stdout.strip()
@@ -48,36 +52,57 @@ class GitSource:
         listing = self._git("ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", "*.xcconfig").stdout
         return [Path(name) for name in listing.split("\0") if name]
 
+    def add_worktree(self, path: Path) -> bool:
+        return self._git("worktree", "add", "--quiet", "--detach", str(path), self.upstream).returncode == 0
+
+    def prune_worktrees(self) -> None:
+        self._git("worktree", "prune")
+
+    def _main_branch(self) -> str:
+        remote_head = self._git("symbolic-ref", "--short", f"refs/remotes/{self._remote}/HEAD")
+        if remote_head.returncode == 0:
+            return remote_head.stdout.strip().partition("/")[2]
+        for name in self.MAIN_BRANCHES:
+            if self._ref_exists(f"refs/remotes/{self._remote}/{name}"):
+                return name
+        raise InstallError(f"в {self.clone} нет {self._remote}/main и {self._remote}/master — "
+                           "хотя бы раз сделать push или pull")
+
+    def _ref_exists(self, ref: str) -> bool:
+        return self._git("rev-parse", "--verify", "--quiet", ref).returncode == 0
+
     def _git(self, *args: str):
         return self._shell.run(["git", "-C", str(self.clone), *args])
 
 
-class BuildTree:
-    """A detached worktree of the upstream branch kept at a fixed path, so incremental builds survive between runs."""
+class Workspace:
+    """Everything one install needs on disk, for the duration of the install only: a detached worktree of the
+    upstream branch (sources only, the history stays in the clone) and Xcode's build folder.
+    Afterwards it goes to the Trash and git forgets the worktree."""
 
-    def __init__(self, shell: Shell, source: GitSource, path: Path):
+    def __init__(self, shell: Shell, source: GitSource):
         self._shell = shell
         self._source = source
-        self.path = path
+        self._root = Path(tempfile.mkdtemp(prefix="install-on-iphone-"))
+        self.tree = self._root / "tree"
+        self.derived_data = self._root / "DerivedData"
+        self.log = self._root / "build.log"
 
-    def checkout(self) -> None:
-        if (self.path / ".git").exists():
-            self._run_git(["-C", str(self.path), "checkout", "--quiet", "--force", "--detach", self._source.upstream])
-        else:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._run_git(["-C", str(self._source.clone), "worktree", "add", "--quiet", "--force", "--detach",
-                           str(self.path), self._source.upstream])
-        if (self.path / ".gitmodules").exists():
-            self._run_git(["-C", str(self.path), "submodule", "update", "--quiet", "--init", "--recursive"])
+    def __enter__(self) -> "Workspace":
+        if not self._source.add_worktree(self.tree):
+            self.__exit__()
+            raise InstallError(f"не получилось выложить {self._source.upstream} во временную папку")
+        if (self.tree / ".gitmodules").exists():
+            self._shell.run(["git", "-C", str(self.tree), "submodule", "update", "--quiet", "--init", "--recursive"])
         self._copy_local_configs()
+        return self
+
+    def __exit__(self, *_) -> None:
+        self._shell.run(["trash", str(self._root)])
+        self._source.prune_worktrees()
 
     def _copy_local_configs(self) -> None:
         for relative in self._source.local_configs():
-            target = self.path / relative
+            target = self.tree / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(self._source.clone / relative, target)
-
-    def _run_git(self, args: List[str]) -> None:
-        result = self._shell.run(["git", *args])
-        if result.returncode != 0:
-            raise InstallError(f"не получилось подготовить папку сборки: {result.stderr.strip()}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import plistlib
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import List
@@ -12,7 +13,7 @@ from .devices import Device, DevicePicker, Devices, XcodeWaker
 from .errors import InstallError
 from .profiles import ProfileRefresh
 from .shell import Shell
-from .source import BuildTree, GitSource
+from .source import GitSource, Workspace
 from .xcode import PlatformCheck, SchemePicker, TeamPicker, XcodeInstall, XcodeInstalls, XcodeProject
 
 LOG_TAIL_LINES = 40
@@ -23,18 +24,12 @@ class Installer:
         self._config = config
         self._shell = shell
         self._console = console
-        cache = config.cache
-        self._log = cache / "build.log"
         self._source = GitSource(shell, config.clone_path, config.remote, config.branch)
-        self._tree = BuildTree(shell, self._source, cache / "tree")
-        self._derived_data = cache / "DerivedData"
-        self._packages = cache / "SourcePackages"
         self._devices = Devices(shell)
         self._waker = XcodeWaker(shell, self._devices)
 
     def run(self) -> None:
-        self._config.cache.mkdir(parents=True, exist_ok=True)
-        with (self._config.cache / "lock").open("w") as lock:
+        with self._config.lock.open("w") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -48,12 +43,13 @@ class Installer:
         console = self._console
         upstream = self._source.upstream
 
-        console.step(f"Скачиваю свежий {upstream}")
-        self._source.fetch()
+        console.step(f"Сверяю {upstream} с GitHub")
+        online = self._source.fetch()
+        if not online:
+            console.warn(f"GitHub недоступен — ставлю {upstream}, каким он был при последней синхронизации")
         unpushed = self._source.unpushed_commits()
         if unpushed:
-            console.warn(f"в локальном {self._config.branch} {unpushed} незапушенных коммитов — в сборку они не попадут")
-        self._tree.checkout()
+            console.warn(f"в локальном {self._source.branch} {unpushed} незапушенных коммитов — в сборку они не попадут")
         revision = self._source.describe(upstream)
         console.info(revision)
 
@@ -67,9 +63,14 @@ class Installer:
             self._waker.wake(device, xcodes[0].app, lambda seconds: console.info(f"…жду ({seconds} с)"))
         console.info("Соединение есть")
 
+        with Workspace(self._shell, self._source) as workspace:
+            self._build_and_install(workspace, xcodes, device, online, revision)
+
+    def _build_and_install(self, workspace: Workspace, xcodes: List[XcodeInstall], device: Device, online: bool,
+                           revision: str) -> None:
+        console = self._console
         console.step("Читаю проект")
-        project = XcodeProject(self._shell, self._tree.path, self._derived_data, self._packages,
-                               self._config.configuration)
+        project = XcodeProject(self._shell, workspace.tree, workspace.derived_data, self._config.configuration)
         scheme = SchemePicker.pick(project.schemes(), project.name, self._config.scheme)
         xcode = self._xcode_for(project, xcodes, scheme, device)
         project = project.using(xcode)
@@ -80,24 +81,33 @@ class Installer:
             app = replace(project.app(scheme, team), team=team)
         console.info(f"Xcode {xcode.version}, схема {scheme}, приложение {app.path.name}, команда {team}")
 
-        console.step("Обновляю подпись (7 дней с этой установки)")
         refresh = ProfileRefresh(self._shell, team, app.bundle_ids)
-        for bundle_id in refresh.set_aside():
-            console.info(f"старый профиль {bundle_id} убран")
+        if online:
+            console.step("Обновляю подпись (7 дней с этой установки)")
+            for bundle_id in refresh.set_aside():
+                console.info(f"старый профиль {bundle_id} убран")
+        else:
+            console.warn("без сети подпись не продлить — остаётся прежний срок")
 
         console.step(f"Собираю {self._config.configuration} для {device.name}")
-        console.info(f"полный лог: {self._log}")
-        if not project.build(scheme, team, device.udid, self._log):
+        if not project.build(scheme, team, device.udid, workspace.log):
             refresh.restore()
-            log = self._log.read_text(errors="replace")
+            log = workspace.log.read_text(errors="replace")
             console.info("\n".join(log.splitlines()[-LOG_TAIL_LINES:]))
-            raise PlatformCheck.error(log) or InstallError("сборка не прошла, старые профили возвращены")
+            saved = self._save_failure_log(workspace.log)
+            raise PlatformCheck.error(log) or InstallError(f"сборка не прошла, полный лог: {saved}")
         refresh.commit()
         console.info(f"Собрано, подпись до {self._expiry(app.path)}")
 
         console.step("Ставлю на айфон")
         self._devices.install(device, app.path)
         console.success(f"{app.product_name} установлен на {device.name} ({revision})")
+
+    def _save_failure_log(self, log: Path) -> Path:
+        target = self._config.failure_log
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(log, target)
+        return target
 
     def _xcodes(self) -> List[XcodeInstall]:
         if self._config.xcode:
