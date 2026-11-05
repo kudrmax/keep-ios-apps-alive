@@ -90,6 +90,9 @@ class AppIcon:
         if source is None:
             return False
         with tempfile.TemporaryDirectory() as folder:
+            plated = Path(folder) / "plated.png"
+            if self._put_on_mac_plate(source, plated):
+                source = plated
             iconset = Path(folder) / "AppIcon.iconset"
             iconset.mkdir()
             for size in ICON_SIZES:
@@ -103,6 +106,14 @@ class AppIcon:
                                  capture_output=True, text=True).stdout
         icons = [self._clone / name for name in listing.split("\0") if name]
         return max(icons, key=lambda icon: icon.stat().st_size) if icons else None
+
+    @staticmethod
+    def _put_on_mac_plate(source: Path, target: Path) -> bool:
+        """An iPhone icon is a full square that iOS rounds itself; on the Mac the icon carries its own rounded plate.
+        Without Swift the square is used as it is: a launcher with a square icon still works."""
+        script = Path(__file__).resolve().parent / "mac_icon.swift"
+        return subprocess.run(["xcrun", "swift", str(script), str(source), str(target)],
+                              capture_output=True).returncode == 0 and target.exists()
 
     @staticmethod
     def _resize(source: Path, size: int, target: Path) -> None:
