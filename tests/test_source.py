@@ -114,6 +114,19 @@ class WorkspaceTest(unittest.TestCase):
             self.assertEqual((workspace.tree / "lib" / "file.txt").read_text(), "library")
         self.assertEqual(len(self.repos.git(self.repos.clone, "worktree", "list").splitlines()), 1)
 
+    def test_local_configs_are_copied_but_not_a_worktree_kept_in_the_clone(self):
+        (self.repos.clone / ".gitignore").write_text("*.xcconfig\n.worktrees/\n")
+        self.repos.git(self.repos.clone, "add", ".gitignore")
+        self.repos.git(self.repos.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ignore")
+        self.repos.git(self.repos.clone, "push", "-q", "origin", "main")
+        self.repos.git(self.repos.clone, "fetch", "-q", "origin")
+        (self.repos.clone / "Config").mkdir()
+        (self.repos.clone / "Config" / "Team.xcconfig").write_text("DEVELOPMENT_TEAM = T")
+        self.repos.git(self.repos.clone, "worktree", "add", "-q", "-b", "other", str(self.repos.clone / ".worktrees" / "other"))
+        with Workspace(Shell(), self.source) as workspace:
+            self.assertEqual((workspace.tree / "Config" / "Team.xcconfig").read_text(), "DEVELOPMENT_TEAM = T")
+            self.assertFalse((workspace.tree / ".worktrees").exists())
+
     def test_no_branch_on_remote(self):
         source = GitSource(Shell(), self.repos.clone, "origin", "missing")
         source.FETCH_PAUSE_SECONDS = 0
