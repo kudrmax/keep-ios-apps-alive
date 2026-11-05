@@ -48,9 +48,10 @@ class GitSource:
         return self._git("log", "--oneline", "-1", revision).stdout.strip()
 
     def local_configs(self) -> List[Path]:
-        """Git-ignored *.xcconfig files, such as a personal signing team, that a fresh checkout lacks."""
+        """Git-ignored *.xcconfig files, such as a personal signing team, that a fresh checkout lacks.
+        Another repository inside the clone (a worktree kept in it) is listed as its folder, ending in a slash: skipped."""
         listing = self._git("ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", "*.xcconfig").stdout
-        return [Path(name) for name in listing.split("\0") if name]
+        return [Path(name) for name in listing.split("\0") if name and not name.endswith("/")]
 
     def add_worktree(self, path: Path) -> bool:
         return self._git("worktree", "add", "--quiet", "--detach", str(path), self.upstream).returncode == 0
