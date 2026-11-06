@@ -38,28 +38,34 @@ class DevicePickerTest(unittest.TestCase):
             DevicePicker.pick([], None)
 
 
-class ListingShell:
-    """Answers `devicectl list devices` with one paired iPhone, its tunnel up or down."""
+class DetailsShell:
+    """Answers `devicectl device info details` for the iPhone, its tunnel up or down, or fails."""
 
-    def __init__(self, tunnel):
+    def __init__(self, tunnel, returncode=0):
         self.tunnel = tunnel
+        self.returncode = returncode
+        self.asked = []
 
     def run(self, args, cwd=None):
-        listing = {"result": {"devices": [{
-            "identifier": "PHONE",
-            "hardwareProperties": {"deviceType": "iPhone", "udid": "UDID"},
-            "deviceProperties": {"name": "iPhone"},
-            "connectionProperties": {"pairingState": "paired", "transportType": "localNetwork", "tunnelState": self.tunnel},
-        }]}}
-        Path(args[args.index("--json-output") + 1]).write_text(json.dumps(listing))
-        return subprocess.CompletedProcess(args, 0, "", "")
+        self.asked.append(args)
+        details = {"result": {"identifier": "PHONE", "connectionProperties": {"pairingState": "paired", "tunnelState": self.tunnel}}}
+        Path(args[args.index("--json-output") + 1]).write_text(json.dumps(details))
+        return subprocess.CompletedProcess(args, self.returncode, "", "")
 
 
 class ReachableTest(unittest.TestCase):
     def test_reachable_only_while_the_tunnel_is_up(self):
         phone = device("PHONE")
-        self.assertTrue(Devices(ListingShell("connected")).reachable(phone))
-        self.assertFalse(Devices(ListingShell("unavailable")).reachable(phone))
+        self.assertTrue(Devices(DetailsShell("connected")).reachable(phone))
+        self.assertFalse(Devices(DetailsShell("unavailable")).reachable(phone))
+
+    def test_asks_the_iphone_itself_so_the_tunnel_comes_up(self):
+        shell = DetailsShell("connected")
+        Devices(shell).reachable(device("PHONE"))
+        self.assertEqual(shell.asked[0][:5], ["xcrun", "devicectl", "device", "info", "details"])
+
+    def test_a_failed_answer_is_not_reachable(self):
+        self.assertFalse(Devices(DetailsShell("connected", returncode=1)).reachable(device("PHONE")))
 
 
 class SchemePickerTest(unittest.TestCase):
