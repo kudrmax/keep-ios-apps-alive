@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import plistlib
 import shutil
 from contextlib import ExitStack
@@ -12,6 +11,7 @@ from .config import InstallConfig
 from .console import Console
 from .devices import Device, DevicePicker, Devices, XcodeWaker
 from .errors import InstallError
+from .lock import InstallLock, Launch, LockOwner
 from .profiles import ProfileRefresh
 from .progress import BuildActivity, StatusLine
 from .shell import Shell
@@ -22,8 +22,9 @@ LOG_TAIL_LINES = 40
 
 
 class Installer:
-    def __init__(self, config: InstallConfig, shell: Shell, console: Console):
+    def __init__(self, config: InstallConfig, shell: Shell, console: Console, launch: Launch):
         self._config = config
+        self._launch = launch
         self._shell = shell
         self._console = console
         self._source = GitSource(shell, config.clone_path, config.remote, config.branch)
@@ -31,11 +32,7 @@ class Installer:
         self._waker = XcodeWaker(shell, self._devices)
 
     def run(self) -> None:
-        with self._config.lock.open("w") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise InstallError(f"{self._config.name} уже ставится в другом окне")
+        with InstallLock(self._config.lock, self._config.name, LockOwner.current(self._launch)):
             try:
                 self._install()
             finally:

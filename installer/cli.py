@@ -12,6 +12,7 @@ from .console import Console
 from .errors import InstallError
 from .installer import Installer
 from .launcher import LauncherApp
+from .lock import Launch
 from .registry import AppRegistry, ProjectName
 from .shell import Shell
 
@@ -64,7 +65,7 @@ class Commands:
         app = self._registry.get(name)
         console = Console(app.name)
         try:
-            Installer(app, Shell(), console).run()
+            Installer(app, Shell(), console, Launch.COMMAND).run()
         except InstallError as error:
             console.failure(str(error))
             return 1

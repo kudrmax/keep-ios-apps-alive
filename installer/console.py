@@ -22,7 +22,7 @@ class Console:
 
     def failure(self, text: str) -> None:
         print(f"\n✖ {text}", flush=True)
-        self._notify(f"Не установлено: {text}")
+        self._notify(f"Не установлено: {text.splitlines()[0]}")
 
     def _notify(self, text: str) -> None:
         script = ["on run argv", "display notification (item 1 of argv) with title (item 2 of argv)", "end run"]

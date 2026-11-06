@@ -8,6 +8,7 @@ from installer.config import InstallConfig
 from installer.console import Console
 from installer.errors import InstallError
 from installer.installer import Installer
+from installer.lock import Launch
 from installer.shell import Shell
 
 
@@ -15,7 +16,7 @@ def main() -> int:
     config = InstallConfig.load(Path(sys.argv[1]))
     console = Console(config.name)
     try:
-        Installer(config, Shell(), console).run()
+        Installer(config, Shell(), console, Launch.ICON).run()
     except InstallError as error:
         console.failure(str(error))
         return 1
