@@ -24,10 +24,11 @@ class Commands:
         self._registry = registry
         self._applications = applications
 
-    def add(self, clone: Path, name: Optional[str], **options: Optional[str]) -> None:
+    def add(self, clone: Path, name: Optional[str], **options: str) -> None:
         clone = clone.expanduser().resolve()
         self._check_clone(clone)
-        app = InstallConfig(name=name or ProjectName.guess(clone), clone=str(clone), **options)
+        project = options.get("project") or "."
+        app = InstallConfig(name=name or ProjectName.guess(clone / project), clone=str(clone), **options)
         self._registry.put(app)
         launcher = self._launcher(app)
         launcher.create()
@@ -104,6 +105,7 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument("--team", help="команда подписи, если в Xcode их несколько")
     add.add_argument("--iphone", help="имя айфона, если сопряжено несколько")
     add.add_argument("--xcode", help="путь к Xcode.app, если автовыбор не подходит")
+    add.add_argument("--project", default=".", help="папка Xcode-проекта (или project.yml) внутри клона, если не корень")
 
     remove = commands.add_parser("remove", help="убрать приложение из списка, иконку — в корзину")
     remove.add_argument("name")
@@ -123,7 +125,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "add":
             commands.add(args.clone, args.name, branch=args.branch, scheme=args.scheme, team=args.team,
-                         iphone=args.iphone, xcode=args.xcode)
+                         iphone=args.iphone, xcode=args.xcode, project=args.project)
         elif args.command == "remove":
             commands.remove(args.name)
         elif args.command == "list":

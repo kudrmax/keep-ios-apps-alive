@@ -46,7 +46,9 @@ class Devices:
         return [self._device(entry) for entry in listing["result"]["devices"] if self._is_paired_iphone(entry)]
 
     def reachable(self, device: Device) -> bool:
-        return self._shell.succeeds(["xcrun", "devicectl", "device", "info", "details", "--device", device.identifier])
+        """Xcode can build for the iPhone and install on it: its tunnel to it is up. `devicectl device info` answers
+        from what it remembers even while the tunnel is down, so it says nothing about that."""
+        return any(found.identifier == device.identifier and found.connected for found in self.paired_iphones())
 
     def install(self, device: Device, app: Path) -> None:
         result = self._shell.run(["xcrun", "devicectl", "device", "install", "app", "--device", device.identifier,
@@ -82,16 +84,17 @@ class XcodeWaker:
         self._devices = devices
         self._opened = False
 
-    def wake(self, device: Device, xcode_app: Path, on_wait) -> None:
+    def wake(self, device: Device, xcode_app: Path, on_wait) -> bool:
+        """Whether the iPhone came on the line while Xcode was open."""
         if not self._shell.succeeds(["pgrep", "-x", "Xcode"]):
             self._opened = True
         self._shell.run(["open", "-g", "-a", str(xcode_app)])
         for attempt in range(1, self.TRIES + 1):
             time.sleep(self.PAUSE_SECONDS)
             if self._devices.reachable(device):
-                return
+                return True
             on_wait(attempt * self.PAUSE_SECONDS)
-        raise InstallError(f"айфон {device.name} не ответил — разблокировать, проверить Wi-Fi или подключить проводом")
+        return False
 
     def close(self) -> None:
         if self._opened:
