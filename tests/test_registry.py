@@ -101,6 +101,20 @@ class CommandsTest(unittest.TestCase):
         with (self._launcher() / "Contents/Info.plist").open("rb") as stream:
             self.assertEqual(plistlib.load(stream)["CFBundleExecutable"], "launch")
 
+    def test_launcher_opens_terminal_with_a_clean_absolute_path(self):
+        """Terminal loses the leading slash of a path with "..", and the shell then finds no installer."""
+        self._main(["add", str(self.clone)])
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        opened = self.root / "opened.txt"
+        fake_open = fake_bin / "open"
+        fake_open.write_text(f'#!/bin/bash\nprintf "%s\\n" "$@" > "{opened}"\n')
+        fake_open.chmod(0o755)
+        subprocess.run([str(self._launcher() / "Contents/MacOS/launch")], check=True,
+                       env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"})
+        command = (self._launcher() / "Contents/Resources/install.command").resolve()
+        self.assertEqual(opened.read_text().splitlines(), ["-a", "Terminal", str(command)])
+
     def test_add_refuses_a_clone_without_remote(self):
         self._git("remote", "remove", "origin")
         self.assertEqual(self._main(["add", str(self.clone)]), 1)

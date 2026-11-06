@@ -14,7 +14,8 @@ TOOL_ROOT = Path(__file__).resolve().parent.parent
 ICON_SIZES = [16, 32, 128, 256, 512]
 
 LAUNCHER = """#!/bin/bash
-open -a Terminal "$(dirname "$0")/../Resources/install.command"
+resources="$(cd "$(dirname "$0")/../Resources" && pwd -P)"
+open -a Terminal "$resources/install.command"
 """
 
 COMMAND = """#!/bin/bash
