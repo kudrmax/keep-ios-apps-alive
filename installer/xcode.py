@@ -91,6 +91,11 @@ class DestinationCheck:
     def supports(destinations: str, device_udid: str) -> bool:
         return any(f"id:{device_udid}" in line and "error:" not in line for line in destinations.splitlines())
 
+    @staticmethod
+    def listed(destinations: str, device_udid: str) -> bool:
+        """Xcode sees the iPhone at all, fit to build for or not: one it does not list is not on the line with it."""
+        return any(f"id:{device_udid}" in line for line in destinations.splitlines())
+
 
 @dataclass(frozen=True)
 class App:
@@ -156,10 +161,12 @@ class XcodeProject:
         return XcodeProject(self._shell.with_developer_dir(xcode.developer_dir), self._root, self._derived_data,
                             self._configuration)
 
+    def destinations(self, scheme: str) -> str:
+        return self._shell.run(["xcodebuild", *self._container_args(), "-scheme", scheme, "-showdestinations"],
+                               cwd=self._root).stdout
+
     def supports(self, scheme: str, device_udid: str) -> bool:
-        result = self._shell.run(["xcodebuild", *self._container_args(), "-scheme", scheme, "-showdestinations"],
-                                 cwd=self._root)
-        return DestinationCheck.supports(result.stdout, device_udid)
+        return DestinationCheck.supports(self.destinations(scheme), device_udid)
 
     def schemes(self) -> List[str]:
         listing = json.loads(self._xcodebuild(self._container_args() + ["-list", "-json"]))

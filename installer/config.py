@@ -19,6 +19,8 @@ class InstallConfig:
     team: Optional[str] = None
     iphone: Optional[str] = None
     xcode: Optional[str] = None
+    # The folder of the Xcode project (or its project.yml) inside the clone, when it is not the root.
+    project: str = "."
 
     @classmethod
     def load(cls, path: Path) -> "InstallConfig":

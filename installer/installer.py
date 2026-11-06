@@ -16,7 +16,7 @@ from .profiles import ProfileRefresh
 from .progress import BuildActivity, StatusLine
 from .shell import Shell
 from .source import GitSource, Workspace
-from .xcode import PlatformCheck, ProjectGenerator, SchemePicker, TeamPicker, XcodeInstall, XcodeInstalls, XcodeProject
+from .xcode import DestinationCheck, PlatformCheck, ProjectGenerator, SchemePicker, TeamPicker, XcodeInstall, XcodeInstalls, XcodeProject
 
 LOG_TAIL_LINES = 40
 
@@ -59,8 +59,13 @@ class Installer:
         if not self._devices.reachable(device):
             console.info("Айфон не отвечает — открываю Xcode, чтобы он поднял соединение")
             console.info("(айфон должен быть разблокирован и в той же Wi-Fi-сети, что и Mac)")
-            self._waker.wake(device, xcodes[0].app, lambda seconds: console.info(f"…жду ({seconds} с)"))
-        console.info("Соединение есть")
+            if self._waker.wake(device, xcodes[0].app, lambda seconds: console.info(f"…жду ({seconds} с)")):
+                console.info("Соединение есть")
+            else:
+                # Xcode may still reach it while building: go on, and the build says what is wrong if it cannot.
+                console.warn("связь с айфоном не поднялась — пробую собрать всё равно")
+        else:
+            console.info("Соединение есть")
 
         console.step(f"Выкладываю {upstream} во временную папку")
         with ExitStack() as cleanup:
@@ -74,10 +79,11 @@ class Installer:
         console.step("Читаю проект")
         with StatusLine("ищу проект") as status:
             generator = ProjectGenerator(self._shell)
-            if generator.needed(workspace.tree):
+            root = workspace.tree / self._config.project
+            if generator.needed(root):
                 status.update("генерирую .xcodeproj из project.yml (XcodeGen)")
-                generator.generate(workspace.tree)
-            project = XcodeProject(self._shell, workspace.tree, workspace.derived_data, self._config.configuration)
+                generator.generate(root)
+            project = XcodeProject(self._shell, root, workspace.derived_data, self._config.configuration)
             status.update("читаю схемы")
             scheme = SchemePicker.pick(project.schemes(), project.name, self._config.scheme)
             status.update("выбираю Xcode, который собирает под этот айфон")
@@ -142,9 +148,15 @@ class Installer:
 
     @staticmethod
     def _xcode_for(project: XcodeProject, xcodes: List[XcodeInstall], scheme: str, device: Device) -> XcodeInstall:
+        listed = False
         for xcode in xcodes:
-            if project.using(xcode).supports(scheme, device.udid):
+            destinations = project.using(xcode).destinations(scheme)
+            if DestinationCheck.supports(destinations, device.udid):
                 return xcode
+            listed = listed or DestinationCheck.listed(destinations, device.udid)
+        if not listed:
+            raise InstallError(f"Xcode не видит {device.name}: связи с айфоном нет — разблокировать его, "
+                               "проверить, что он в той же Wi-Fi-сети, или подключить проводом")
         versions = ", ".join(xcode.version for xcode in xcodes)
         raise InstallError(f"ни один Xcode ({versions}) не собирает {scheme} под {device.name} — "
                            "открыть проект в Xcode и посмотреть, что он пишет про айфон")

@@ -1,10 +1,11 @@
+import json
 import plistlib
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from installer.devices import Device, DevicePicker
+from installer.devices import Device, DevicePicker, Devices
 from installer.errors import InstallError
 from installer.profiles import ProfileMatcher, ProfileRefresh
 from installer.xcode import DestinationCheck, PlatformCheck, SchemePicker, TeamPicker, XcodeInstall
@@ -35,6 +36,30 @@ class DevicePickerTest(unittest.TestCase):
     def test_no_devices(self):
         with self.assertRaises(InstallError):
             DevicePicker.pick([], None)
+
+
+class ListingShell:
+    """Answers `devicectl list devices` with one paired iPhone, its tunnel up or down."""
+
+    def __init__(self, tunnel):
+        self.tunnel = tunnel
+
+    def run(self, args, cwd=None):
+        listing = {"result": {"devices": [{
+            "identifier": "PHONE",
+            "hardwareProperties": {"deviceType": "iPhone", "udid": "UDID"},
+            "deviceProperties": {"name": "iPhone"},
+            "connectionProperties": {"pairingState": "paired", "transportType": "localNetwork", "tunnelState": self.tunnel},
+        }]}}
+        Path(args[args.index("--json-output") + 1]).write_text(json.dumps(listing))
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+
+class ReachableTest(unittest.TestCase):
+    def test_reachable_only_while_the_tunnel_is_up(self):
+        phone = device("PHONE")
+        self.assertTrue(Devices(ListingShell("connected")).reachable(phone))
+        self.assertFalse(Devices(ListingShell("unavailable")).reachable(phone))
 
 
 class SchemePickerTest(unittest.TestCase):
@@ -80,6 +105,11 @@ class XcodeChoiceTest(unittest.TestCase):
 
     def test_absent_device_is_not_supported(self):
         self.assertFalse(DestinationCheck.supports(self.DESTINATIONS, "NONE"))
+
+    def test_listed_with_or_without_error(self):
+        self.assertTrue(DestinationCheck.listed(self.DESTINATIONS, "PHONE"))
+        self.assertTrue(DestinationCheck.listed(self.DESTINATIONS, "OTHER"))
+        self.assertFalse(DestinationCheck.listed(self.DESTINATIONS, "NONE"))
 
     def test_versions_compare_numerically(self):
         versions = [XcodeInstall(Path(v), v) for v in ["26.3", "16.4", "26.10"]]
