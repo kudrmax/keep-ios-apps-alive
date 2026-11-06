@@ -46,9 +46,17 @@ class Devices:
         return [self._device(entry) for entry in listing["result"]["devices"] if self._is_paired_iphone(entry)]
 
     def reachable(self, device: Device) -> bool:
-        """Xcode can build for the iPhone and install on it: its tunnel to it is up. `devicectl device info` answers
-        from what it remembers even while the tunnel is down, so it says nothing about that."""
-        return any(found.identifier == device.identifier and found.connected for found in self.paired_iphones())
+        """Xcode can build for the iPhone and install on it: its tunnel to it is up. Asking the iPhone for its details
+        brings the tunnel up when the iPhone can be reached; the answer then says whether it is, since `devicectl`
+        also answers from what it remembers while the iPhone is out of reach."""
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "device.json"
+            result = self._shell.run(["xcrun", "devicectl", "device", "info", "details", "--device", device.identifier,
+                                      "--json-output", str(output)])
+            if result.returncode != 0 or not output.exists():
+                return False
+            details = json.loads(output.read_text())
+        return details.get("result", {}).get("connectionProperties", {}).get("tunnelState") == "connected"
 
     def install(self, device: Device, app: Path) -> None:
         result = self._shell.run(["xcrun", "devicectl", "device", "install", "app", "--device", device.identifier,
